@@ -12,9 +12,8 @@ def run(experiment,options):
         paramsfile = os.path.join(experiment.outdir, options.params)
 
         if not options.continueTraining:
-            print 'Preparing vocab'
+            print 'Collecting training data vocab'
             vocab = utils.get_vocab(experiment.treebanks,"train")
-            print 'Finished collecting vocab'
 
             with open(paramsfile, 'w') as paramsfp:
                 print 'Saving params to ' + paramsfile
@@ -193,6 +192,10 @@ each")
     group.add_option("--disable-rlmost", action="store_false", dest="rlMostFlag", default=True,
         help='Disable using leftmost and rightmost dependents of words fed to the MLP')
     group.add_option("--userl", action="store_true", dest="rlFlag", default=False)
+    #little ugly
+    group.add_option("--use-recursive-composition", help='recursively compose\
+                     the representation of subtrees. Values: None, RecNN,\
+                     TreeLSTM', type="str", default=None)
     group.add_option("--k", type="int", metavar="INTEGER", default=3,
         help="Number of stack elements to feed to MLP")
     parser.add_option_group(group)
@@ -205,13 +208,15 @@ each")
     group.add_option("--learning-rate", type="float", metavar="FLOAT",
         help="Learning rate for neural network optimizer", default=0.001)
     group.add_option("--char-emb-size", type="int", metavar="INTEGER",
-        help="Character embedding dimensions", default=500)
+        help="Character embedding dimensions", default=24)
     group.add_option("--char-lstm-output-size", type="int", metavar="INTEGER",
-        help="Character BiLSTM dimensions", default=100)
+        help="Character BiLSTM dimensions", default=50)
     group.add_option("--word-emb-size", type="int", metavar="INTEGER",
         help="Word embedding dimensions", default=100)
     group.add_option("--pos-emb-size", type="int", metavar="INTEGER",
         help="Pos embedding dimensions", default=0)
+    group.add_option("--deprel-size", type="int", metavar="INTEGER",
+                     help="Dependency relation dimensions", default=15)
     group.add_option("--tbank-emb-size", type="int", metavar="INTEGER",
         help="Treebank embedding dimensions", default=12)
     group.add_option("--lstm-output-size", type="int", metavar="INTEGER",
@@ -227,6 +232,9 @@ each")
     group.add_option("--activation", help="Activation function in the MLP", default="tanh")
     group.add_option("--no-bilstms", type="int", metavar="INTEGER",
         help='Number of stacked BiLstms - set to 0 to disable', default=2)
+    group.add_option("--unidir-lstm", type="string", metavar="STRING",
+                     help='Replace the BiLSTM with a unidirectional one. Vals:\
+                     None (default), forward, backward, fwbw', default=None)
     parser.add_option_group(group)
 
     group = OptionGroup(parser, "Debug options")

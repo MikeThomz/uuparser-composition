@@ -1,5 +1,31 @@
 import dynet as dy
 
+class LSTM(object):
+    def __init__(self,in_dim,out_dim,model,dropout_rate=None,direction='backward',layers=1):
+        self.dropout_rate = dropout_rate
+        self.surfaceBuilder = dy.VanillaLSTMBuilder(layers, in_dim, out_dim, model)
+        self.direction=direction
+
+    def set_token_vecs(self,sequence,dropout):
+        """
+        get vectors of a sequence by going through the LSTM forward or backward
+        The token objects have a .vec attribute which gets updated
+        @param: sequence is a list of objects that have a .vec attribute which
+        is a vector
+        """
+        if dropout and self.dropout_rate is not None:
+            self.surfaceBuilder.set_dropout(self.dropout_rate)
+        else:
+            self.surfaceBuilder.set_dropout(0)
+
+        lstm_state  = self.surfaceBuilder.initial_state()
+        if self.direction == 'backward':
+            sequence = reversed(sequence)
+
+        for token in sequence:
+            lstm_state = lstm_state.add_input( token.vec )
+            token.vec = lstm_state.output()
+
 class BiLSTM(object):
     def __init__(self,in_dim,out_dim,model,dropout_rate=None):
         self.dropout_rate = dropout_rate

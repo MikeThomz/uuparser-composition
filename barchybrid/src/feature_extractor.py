@@ -1,4 +1,4 @@
-from bilstm import BiLSTM
+from bilstm import BiLSTM, LSTM
 import utils
 import dynet as dy
 import random
@@ -15,6 +15,7 @@ class FeatureExtractor(object):
 
         extra_words = 2 # MLP padding vector and OOV vector
         self.words = {word: ind for ind, word in enumerate(words,extra_words)}
+        #why not just len(self.words)?
         self.word_lookup = self.model.add_lookup_parameters((len(self.words)+extra_words, options.word_emb_size))
 
         extra_pos = 2 # MLP padding vector and OOV vector
@@ -46,12 +47,21 @@ class FeatureExtractor(object):
 
         self.bilstms = []
         if options.no_bilstms > 0:
-            self.bilstms.append(BiLSTM(self.lstm_input_size, options.lstm_output_size, self.model,
-                                  dropout_rate=0.33))
-            for i in range(1,options.no_bilstms):
-                self.bilstms.append(BiLSTM(2*options.lstm_output_size,
-                                  options.lstm_output_size, self.model,
-                                  dropout_rate=0.33))
+            if options.unidir_lstm is not None:
+                #replace the BiLSTMs with unidirectional ones
+                #it's ugly to still call it bilstm but easier
+                if options.unidir_lstm:
+                    self.bilstms.append(LSTM(self.lstm_input_size, 2*options.lstm_output_size, self.model,
+                                               dropout_rate=0.33,
+                                               direction=options.unidir_lstm,
+                                               layers= options.no_bilstms))
+            else:
+                self.bilstms.append(BiLSTM(self.lstm_input_size, options.lstm_output_size, self.model,
+                                      dropout_rate=0.33))
+                for i in range(1,options.no_bilstms):
+                    self.bilstms.append(BiLSTM(2*options.lstm_output_size,
+                                      options.lstm_output_size, self.model,
+                                      dropout_rate=0.33))
             #used in the PaddingVec
             self.word2lstm = self.model.add_parameters((options.lstm_output_size*2, self.lstm_input_size))
             self.word2lstmbias = self.model.add_parameters((options.lstm_output_size*2))
@@ -64,6 +74,23 @@ class FeatureExtractor(object):
                                   dropout_rate=0.33)
 
         self.charPadding = self.model.add_parameters((options.char_lstm_output_size*2))
+
+        #recursive composition things
+        if options.use_recursive_composition:
+            deprel_dir = [(rel,direction) for rel in self.irels for direction in [0,1]]
+            extra_deprel = 1 # padding rel vec
+            #this does not work
+            self.ideprel_dir = {val:ind for ind,val in enumerate(deprel_dir, extra_deprel)}
+            self.deprel_lookup = self.model.add_lookup_parameters((len(self.ideprel_dir)+extra_deprel, options.deprel_size))
+            lstm_out_dim = options.lstm_output_size*2
+            if options.use_recursive_composition == 'RecNN':
+                self.hCompos = self.model.add_parameters((lstm_out_dim,lstm_out_dim))
+                self.dCompos = self.model.add_parameters((lstm_out_dim,lstm_out_dim))
+                self.rCompos = self.model.add_parameters((lstm_out_dim,options.deprel_size))
+                self.biasCompos = self.model.add_parameters((lstm_out_dim))
+            else:
+                compos_in_dim = lstm_out_dim*2 + options.deprel_size
+                self.composLSTM = dy.VanillaLSTMBuilder(1, compos_in_dim, lstm_out_dim, self.model)
 
     def Init(self,options):
         paddingWordVec = self.word_lookup[1] if options.word_emb_size > 0 else None

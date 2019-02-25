@@ -21,7 +21,8 @@ class OptionsManager(object):
                 raise Exception("You need to specify --datadir")
             elif options.shared_task and not options.testdir:
                 raise Exception("You need to specify --testdir")
-            if options.predict and not (options.datadir or options.testdir):
+            if options.predict and not (options.datadir or options.testdir or
+                                        options.testfile):
                 raise Exception("You need to specify --testdir")
 
         if not options.predict:
@@ -56,6 +57,13 @@ class OptionsManager(object):
 
         if not options.multiling:
             options.tbank_emb_size = 0
+
+        if options.use_recursive_composition:
+            print 'Warning: recursive composition requires using head and no\
+            external features - disregarding those options values'
+            options.headFlag = True
+            options.rlFlag = False
+            options.rlMostFlag = False
 
         options.conllu = True #default
 

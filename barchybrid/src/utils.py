@@ -1,6 +1,7 @@
 from collections import defaultdict, Counter, OrderedDict
 import re
-import os,time
+import os
+from time import time
 from itertools import chain
 from operator import itemgetter
 import random
@@ -148,6 +149,8 @@ def get_vocab(treebanks,datasplit,char_map={}):
     Collect frequencies of words, cpos, pos and deprels + languages.
     """
 
+    te = time()
+
     data = read_conll_dir(treebanks,datasplit,char_map=char_map)
 
     # could use sets directly rather than counters for most of these,
@@ -173,6 +176,8 @@ def get_vocab(treebanks,datasplit,char_map={}):
                 tbankCount.update([treebank_id])
                 lang = get_lang_from_tbank_id(treebank_id)
                 langCount.update([lang])
+
+    print "Finished collecting vocab in %.2fs"%(time()-te)
 
     # the redundancy with wordsCount is deliberate and crucial to ensure the word lookup
     # loads the same when predicting with a saved model later on
@@ -271,7 +276,6 @@ def read_conll(filename, treebank_id=None, proxy_tbank=None, maxSize=-1, hard_li
     print "Reading " + filename
     if vocab_prep and not hard_lim:
         maxSize = -1 # when preparing the vocab with a soft limit we need to use the whole corpus
-    ts = time.time()
     dropped = 0
     sents_read = 0
     if treebank_id:
@@ -336,7 +340,7 @@ def read_conll(filename, treebank_id=None, proxy_tbank=None, maxSize=-1, hard_li
 #    if len(tokens) > 1:
 #        yield tokens
 
-    print sents_read, 'sentences read'
+    print '%u sentences read'%(sents_read)
 
     if maxSize > 0 and not hard_lim:
         if len(sents) > maxSize:
@@ -344,9 +348,6 @@ def read_conll(filename, treebank_id=None, proxy_tbank=None, maxSize=-1, hard_li
             print "Yielding " + str(len(sents)) + " random sentences"
         for toks in sents:
             yield toks
-
-    te = time.time()
-    print 'Time: %.2gs'%(te-ts)
 
 def write_conll(fn, conll_gen):
     print "Writing to " + fn
@@ -443,7 +444,7 @@ def get_LAS_score(filename, conllu=True):
 def extract_embeddings_from_file(filename, words=None, max_emb=-1, filtered_filename=None):
     # words should be a set used to filter the embeddings
     print "Extracting embeddings from", filename
-    ts = time.time()
+    ts = time()
     line_count = 0
     error_count = 0 # e.g. invalid utf-8 in embeddings file
 
@@ -469,9 +470,7 @@ def extract_embeddings_from_file(filename, words=None, max_emb=-1, filtered_file
             else:
                 break
 
-    print "Read %i embeddings"%line_count
-    te = time.time()
-    print 'Time: %.2gs'%(te-ts)
+    print "Read %i embeddings in %.2gs"%(line_count,time()-ts)
 #    print "%i utf-8 errors"%error_count
     if words:
         print "%i entries found from vocabulary (out of %i)"%(len(embeddings),len(words))

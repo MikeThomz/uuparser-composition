@@ -1,8 +1,9 @@
 from utils import ParseForest, read_conll, write_conll
 from operator import itemgetter
 from itertools import chain
-import utils, time, random
+import utils, random
 import numpy as np
+from time import time
 from copy import deepcopy
 from collections import defaultdict
 import codecs, json
@@ -34,16 +35,18 @@ class ArcHybridLSTM:
         self.rlMostFlag = options.rlMostFlag
         self.rlFlag = options.rlFlag
         self.k = options.k
+        self.recursive_composition = options.use_recursive_composition
+        #ugly hack
 
         #dimensions depending on extended features
-        self.nnvecs = (1 if self.headFlag else 0) + (2 if self.rlFlag or self.rlMostFlag else 0)
+        self.nnvecs = (1 if self.headFlag else 0) + (2 if self.rlFlag or self.rlMostFlag else 0) + (1 if self.recursive_composition else 0)
         self.feature_extractor = FeatureExtractor(self.model,options,vocab,self.nnvecs)
         self.irels = self.feature_extractor.irels
 
         if options.no_bilstms > 0:
             mlp_in_dims = options.lstm_output_size*2*self.nnvecs*(self.k+1)
         else:
-            mlp_in_dims = self.feature_extractor.lstm_input_size*self.nnvecs*(self.k+1)
+            mlp_in_dims = options.lstm_input_size*self.nnvecs*(self.k+1)
 
         self.unlabeled_MLP = MLP(self.model, 'unlabeled', mlp_in_dims, options.mlp_hidden_dims,
                                  options.mlp_hidden2_dims, 4, self.activation)
@@ -127,6 +130,7 @@ class ArcHybridLSTM:
 
     def apply_transition(self,best,stack,buf,hoffset):
         if best[1] == SHIFT:
+            #replace the lstm rep with the forward ones
             stack.roots.append(buf.roots[0])
             del buf.roots[0]
 
@@ -150,9 +154,29 @@ class ArcHybridLSTM:
             if self.rlMostFlag:
                 #deepest leftmost/rightmost descendant
                 parent.lstms[best[1] + hoffset] = child.lstms[best[1] + hoffset]
-            if self.rlFlag:
+            elif self.rlFlag:
                 #leftmost/rightmost child
                 parent.lstms[best[1] + hoffset] = child.vec
+            elif self.recursive_composition:
+                #ouch
+                if self.recursive_composition == 'RecNN':
+                    #this code should be out of here: a Layer in a DNN lib
+                    composition_input = dy.affine_transform([self.feature_extractor.biasCompos.expr(),\
+                                                             self.feature_extractor.dCompos.expr(), child.lstms[1] , \
+                                                             self.feature_extractor.hCompos.expr(), parent.lstms[1],\
+                                                             self.feature_extractor.rCompos.expr(), \
+                                                             self.feature_extractor.deprel_lookup[self.feature_extractor.ideprel_dir[best[0],best[1]]]])
+                    composed_rep = self.activation(composition_input)
+                    parent.lstms[1]  = composed_rep
+
+                else:
+                    #TreeLSTM
+                    rel_vec = self.feature_extractor.deprel_lookup[self.feature_extractor.ideprel_dir[best[0],best[1]]]
+                    vec = dy.concatenate([child.lstms[1],parent.lstms[1],rel_vec])
+                    if not parent.lstm:
+                        parent.lstm = self.feature_extractor.composLSTM.initial_state()
+
+                    parent.lstms[1] = parent.lstm.add_input(vec).output()
 
     def calculate_cost(self,scores,s0,s1,b,beta,stack_ids):
         if len(scores[LEFT_ARC]) == 0:
@@ -212,6 +236,7 @@ class ArcHybridLSTM:
             char_map_fh = codecs.open(options.char_map_file,encoding='utf-8')
             char_map = json.loads(char_map_fh.read())
         # should probably use a namedtuple in get_vocab to make this prettier
+        print "Collecting test data vocab"
         _, test_words, test_chars, _, _, _, test_treebanks, test_langs = utils.get_vocab(treebanks,datasplit,char_map)
         # get external embeddings for the set of words and chars in the test vocab but not in the training vocab
         test_embeddings = defaultdict(lambda:{})
@@ -232,6 +257,7 @@ class ArcHybridLSTM:
                 if len(test_langs) > 1 and test_embeddings["chars"]:
                     print "External embeddings found for %i chars (out of %i)"%(len(test_embeddings["chars"]),len(new_test_chars))
 
+        ts = time()
         data = utils.read_conll_dir(treebanks,datasplit,char_map=char_map)
         for iSentence, osentence in enumerate(data,1):
             sentence = deepcopy(osentence)
@@ -249,9 +275,11 @@ class ArcHybridLSTM:
 
             for root in conll_sentence:
                 root.lstms = [root.vec] if self.headFlag else []
-                root.lstms += [self.feature_extractor.paddingVec for _ in range(self.nnvecs - hoffset)]
-                root.relation = root.relation if root.relation in self.irels else 'runk'
-
+                if not self.recursive_composition:
+                    root.lstms += [self.feature_extractor.paddingVec for _ in range(self.nnvecs - hoffset)]
+                else:
+                    root.lstms += [root.vec]
+                    root.lstm = None #only necessary for treeLSTM case
 
             while not (len(buf) == 1 and len(stack) == 0):
                 scores = self.__evaluate(stack, buf, False)
@@ -274,6 +302,7 @@ class ArcHybridLSTM:
                 tok_o.pred_parent_id = tok.pred_parent_id
             yield osentence
 
+        print "Total prediction time: %.2fs"%(time()-ts)
 
     def Train(self, trainData, options):
         mloss = 0.0
@@ -283,9 +312,8 @@ class ArcHybridLSTM:
         etotal = 0
         ninf = -float('inf')
 
-
-        beg = time.time()
-        start = time.time()
+        ts = time()
+        start = ts
 
         random.shuffle(trainData) # in certain cases the data will already have been shuffled after being read from file or while creating dev data
         print "Length of training data: ", len(trainData)
@@ -300,9 +328,9 @@ class ArcHybridLSTM:
                 ' Loss: %.3f'%(eloss / etotal)+ \
                 ' Errors: %.3f'%((float(eerrors)) / etotal)+\
                 ' Labeled Errors: %.3f'%(float(lerrors) / etotal)+\
-                ' Time: %.2gs'%(time.time()-start)
+                ' Time: %.2gs'%(time()-start)
                 print loss_message
-                start = time.time()
+                start = time()
                 eerrors = 0
                 eloss = 0.0
                 etotal = 0
@@ -319,8 +347,13 @@ class ArcHybridLSTM:
 
             for root in conll_sentence:
                 root.lstms = [root.vec] if self.headFlag else []
-                root.lstms += [self.feature_extractor.paddingVec for _ in range(self.nnvecs - hoffset)]
-                root.relation = root.relation if root.relation in self.irels else 'runk'
+                #root.lstms += [self.feature_extractor.paddingVec for _ in range(self.nnvecs - hoffset)]
+                if not self.recursive_composition:
+                    root.lstms += [self.feature_extractor.paddingVec for _ in range(self.nnvecs - hoffset)]
+                else:
+                    root.lstms += [root.vec]
+                    root.lstm = None
+
 
             while not (len(buf) == 1 and len(stack) == 0):
                 scores = self.__evaluate(stack, buf, True)
@@ -406,4 +439,4 @@ class ArcHybridLSTM:
 
         self.trainer.update()
         print "Loss: ", mloss/iSentence
-        print "Total Training Time: %.2gs"%(time.time()-beg)
+        print "Total training time: %.2fs"%(time()-ts)
